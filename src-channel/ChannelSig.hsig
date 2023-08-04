@@ -1,0 +1,46 @@
+{-# language KindSignatures #-}
+
+signature ChannelSig where
+
+import Data.Kind (Type)
+import Data.Int (Int32)
+import Data.Text (Text)
+import Data.Primitive (ByteArray)
+import Data.Bytes.Chunks (Chunks)
+
+data SendException :: Type
+data ReceiveException :: Type
+data ConnectException :: Type
+
+data M :: Type -> Type
+
+instance Functor M
+instance Applicative M
+instance Monad M
+
+data Environment :: Type
+data Resource :: Type
+
+-- | Performs hostname resolution and connection as part of the
+-- same operation.
+connect ::
+     Text -- hostname
+  -> M (Either ConnectException Resource)
+
+-- | The connection is scoped. The implementation must close it after
+-- the callback completes. The close operation does not have a way to
+-- indicate recoverable failure.
+withConnection ::
+     Text -- hostname
+  -> (Either ConnectException Resource -> M a)
+  -> M a
+
+send ::
+     Resource
+  -> Chunks
+  -> M (Either SendException ())
+
+receiveExactly ::
+     Resource
+  -> Int
+  -> M (Either ReceiveException ByteArray)

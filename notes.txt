@@ -1,0 +1,6 @@
+Things to do:
+
+* [x] Write a findCoordinator1 method that finds the
+  coordinator for a single consumer group.
+* [x] Use mixins (or something in cabal) to rename modules and
+  drop the version components.

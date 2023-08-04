@@ -1,0 +1,130 @@
+cabal-version: 3.4
+name: kafka-exchange
+version: 0.1.0.0
+license: BSD-3-Clause
+license-file: LICENSE
+author: Andrew Martin
+maintainer: amartin@layer3com.com
+category: Data
+build-type: Simple
+extra-doc-files: CHANGELOG.md
+-- synopsis:
+-- description:
+-- copyright:
+-- extra-source-files:
+
+library types
+  visibility: private
+  build-depends:
+    , base >= 4.11.1.0 && <5
+    , kafka-interchange
+  exposed-modules:
+    Kafka.Exchange.Types
+  hs-source-dirs: src-types
+  default-language: Haskell2010
+  ghc-options: -O2 -Wall
+  -- Strip version numbers from Kafka modules
+  reexported-modules:
+    , Kafka.ApiVersions.V3 as Kafka.ApiVersions
+    , Kafka.Metadata.V12 as Kafka.Metadata
+    , Kafka.InitProducerId.V4 as Kafka.InitProducerId
+    , Kafka.Produce.V9 as Kafka.Produce
+    , Kafka.FindCoordinator.V4 as Kafka.FindCoordinator
+    , Kafka.FindCoordinator.Request.V4 as Request.FindCoordinator
+    , Kafka.FindCoordinator.Response.V4 as Response.FindCoordinator
+    , Kafka.ListOffsets.V7 as Kafka.ListOffsets
+    , Kafka.Fetch.V13 as Kafka.Fetch
+    , Kafka.JoinGroup.V9 as Kafka.JoinGroup
+    , Kafka.SyncGroup.V5 as Kafka.SyncGroup
+    , Kafka.OffsetFetch.V8 as Kafka.OffsetFetch
+    , Kafka.Heartbeat.V4 as Kafka.Heartbeat
+    , Kafka.LeaveGroup.V5 as Kafka.LeaveGroup
+
+library channel
+  visibility: private
+  build-depends:
+    , base >= 4.11.1.0 && <5
+    , kafka-interchange
+    , text >=2.0
+    , byteslice >=0.2.8
+    , primitive >=0.8
+    , transformers >=0.5.6
+    , kafka-exchange:types
+    , natural-arithmetic >=0.1.4
+    , byte-order >=0.1.3
+    , contiguous >=0.6.4
+    , bytesmith >=0.3.9
+  signatures:
+    ChannelSig
+  exposed-modules:
+    Channel
+  hs-source-dirs: src-channel
+  default-language: Haskell2010
+  ghc-options: -O2 -Wall
+
+-- Inherited signature: ChannelSig
+library exchange
+  visibility: private
+  build-depends:
+    , base >= 4.11.1.0 && <5
+    , kafka-interchange
+    , text >=2.0
+    , byteslice >=0.2.8
+    , primitive >=0.8
+    , bytesmith >=0.3.9
+    , byte-order >=0.1.3
+    , transformers >=0.5.6
+    , kafka-exchange:types
+    , kafka-exchange:channel
+    , natural-arithmetic >=0.1.4
+  signatures:
+    Communication
+  exposed-modules:
+    Exchange
+  hs-source-dirs: src-exchange
+  default-language: Haskell2010
+  ghc-options: -O2 -Wall
+
+-- Inherited signature: ChannelSig
+library
+  build-depends:
+    , base >= 4.11.1.0 && <5
+    , primitive >=0.8
+    , contiguous >=0.6.4
+    , text >=2.0
+    , kafka-interchange
+    , kafka-exchange:types
+    , kafka-exchange:exchange
+    , kafka-exchange:channel
+    , natural-arithmetic >=0.1.4
+  default-language: Haskell2010
+  ghc-options: -O2 -Wall
+  hs-source-dirs: src
+  exposed-modules:
+    Kafka.Exchange
+  mixins:
+    kafka-exchange:channel (Channel as Chan),
+    kafka-exchange:exchange (Exchange as Produce)
+      requires (Communication as Kafka.Produce),
+    kafka-exchange:exchange (Exchange as ApiVersions)
+      requires (Communication as Kafka.ApiVersions),
+    kafka-exchange:exchange (Exchange as Metadata)
+      requires (Communication as Kafka.Metadata),
+    kafka-exchange:exchange (Exchange as SyncGroup)
+      requires (Communication as Kafka.SyncGroup),
+    kafka-exchange:exchange (Exchange as JoinGroup)
+      requires (Communication as Kafka.JoinGroup),
+    kafka-exchange:exchange (Exchange as Fetch)
+      requires (Communication as Kafka.Fetch),
+    kafka-exchange:exchange (Exchange as FindCoordinator)
+      requires (Communication as Kafka.FindCoordinator),
+    kafka-exchange:exchange (Exchange as ListOffsets)
+      requires (Communication as Kafka.ListOffsets),
+    kafka-exchange:exchange (Exchange as InitProducerId)
+      requires (Communication as Kafka.InitProducerId),
+    kafka-exchange:exchange (Exchange as OffsetFetch)
+      requires (Communication as Kafka.OffsetFetch),
+    kafka-exchange:exchange (Exchange as Heartbeat)
+      requires (Communication as Kafka.Heartbeat),
+    kafka-exchange:exchange (Exchange as LeaveGroup)
+      requires (Communication as Kafka.LeaveGroup),

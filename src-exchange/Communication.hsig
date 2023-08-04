@@ -1,0 +1,24 @@
+{-# language KindSignatures #-}
+
+signature Communication where
+
+import Data.Int (Int16)
+import Data.Kind (Type)
+import Kafka.Parser.Context (Context)
+import Data.Bytes.Chunks (Chunks)
+import Data.Bytes (Bytes)
+import Kafka.ApiKey (ApiKey)
+
+data Request :: Type
+data Response :: Type
+
+decode :: Bytes -> Either Context Response
+toChunks :: Request -> Chunks
+apiKey :: ApiKey
+apiVersion :: Int16
+
+-- Currently the only options are 0 and 1. This should be
+-- set to 1 for almost everything. The notable exception
+-- is the ApiVersions response, which uses version 0 of
+-- the header for compatibility reasons.
+responseHeaderVersion :: Int16
