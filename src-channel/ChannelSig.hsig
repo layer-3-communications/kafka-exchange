@@ -7,10 +7,21 @@ import Data.Int (Int32)
 import Data.Text (Text)
 import Data.Primitive (ByteArray)
 import Data.Bytes.Chunks (Chunks)
+import Data.Word (Word16)
+import Kafka.Exchange.Types (Broker)
 
+-- | Exceptions that can occur while sending data.
 data SendException :: Type
+
+-- | Exceptions that can occur while receiving data.
 data ReceiveException :: Type
+
+-- | Exceptions that can occur while connecting to broker.
 data ConnectException :: Type
+
+showsPrecSendException :: Int -> SendException -> String -> String
+showsPrecReceiveException :: Int -> ReceiveException -> String -> String
+showsPrecConnectException :: Int -> ConnectException -> String -> String
 
 data M :: Type -> Type
 
@@ -18,20 +29,15 @@ instance Functor M
 instance Applicative M
 instance Monad M
 
-data Environment :: Type
 data Resource :: Type
 
--- | Performs hostname resolution and connection as part of the
--- same operation.
-connect ::
-     Text -- hostname
-  -> M (Either ConnectException Resource)
-
--- | The connection is scoped. The implementation must close it after
--- the callback completes. The close operation does not have a way to
--- indicate recoverable failure.
+-- | The connection is scoped. Performs hostname resolution. The
+-- implementation must close the resource after the callback completes.
+-- The close operation does not have a way to indicate recoverable
+-- failure.
 withConnection ::
      Text -- hostname
+  -> Word16 -- port
   -> (Either ConnectException Resource -> M a)
   -> M a
 

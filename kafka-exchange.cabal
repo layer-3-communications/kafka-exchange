@@ -17,6 +17,7 @@ library types
   visibility: private
   build-depends:
     , base >= 4.11.1.0 && <5
+    , text >=2.0
     , kafka-interchange
   exposed-modules:
     Kafka.Exchange.Types
@@ -28,7 +29,13 @@ library types
     , Kafka.ApiVersions.V3 as Kafka.ApiVersions
     , Kafka.Metadata.V12 as Kafka.Metadata
     , Kafka.InitProducerId.V4 as Kafka.InitProducerId
+    , Kafka.InitProducerId.Request.V4 as Request.InitProducerId
+    , Kafka.InitProducerId.Response.V4 as Response.InitProducerId
+    , Kafka.Metadata.Request.V12 as Request.Metadata
+    , Kafka.Metadata.Response.V12 as Response.Metadata
     , Kafka.Produce.V9 as Kafka.Produce
+    , Kafka.Produce.Request.V9 as Request.Produce
+    , Kafka.Produce.Response.V9 as Response.Produce
     , Kafka.FindCoordinator.V4 as Kafka.FindCoordinator
     , Kafka.FindCoordinator.Request.V4 as Request.FindCoordinator
     , Kafka.FindCoordinator.Response.V4 as Response.FindCoordinator
