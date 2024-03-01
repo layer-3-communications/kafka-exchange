@@ -16,8 +16,12 @@ module Channel
   , with
   , withExisting
   , throw
+  , throwProtocolException
+  , throwErrorCode
   , lift
   , exchangeBytes
+  , lookupHostname
+  , lookupPort
   , substitute
     -- * Exceptions
   , KafkaException(..)
@@ -75,6 +79,10 @@ instance Show e => Show (KafkaException e) where
 
 data CommunicationException = CommunicationException
   { apiKey :: !ApiKey
+  , hostname :: !Text
+    -- ^ Which broker were we communicating with when the failure happened.
+  , port :: !Word16
+    -- ^ Which port was used to talk with the broker.
   , correlationId :: !Int32
   , description :: !Description
   } deriving (Show)
@@ -107,7 +115,7 @@ data Env = Env
   !Resource -- probably a socket
   !Int32 -- correlation id
 
-data M e (n :: Nat) a = M
+newtype M e (n :: Nat) a = M
   (    PrimArray Int -- Length m. Indices (>=0, <n) into environment array
     -> SmallArray Env -- Length n
     -> Text -- client id, shared by all sessions
@@ -159,12 +167,12 @@ with ::
      Broker -- ^ Hostname or IP address of broker
   -> M e (n + 1) a -- ^ Action in which additional broker is available
   -> M e n a
-with (Broker host port) (M f) = M $ \ixs envs clientId ->
-  case C.findIndex (\(Env existingHost existingPort _ _) -> existingHost == host && existingPort == port) envs of
-    Nothing -> ChannelSig.withConnection host port $ \r -> case r of
+with (Broker host thePort) (M f) = M $ \ixs envs clientId ->
+  case C.findIndex (\(Env existingHost existingPort _ _) -> existingHost == host && existingPort == thePort) envs of
+    Nothing -> ChannelSig.withConnection host thePort $ \r -> case r of
       Left e -> pure (Left (Connect e))
       Right resource ->
-        let !env = Env host port resource 0
+        let !env = Env host thePort resource 0
             !envs' = C.insertAt envs (C.size envs) env
             !ixs' = C.insertAt ixs 0 (C.size envs)
          in f ixs' envs' clientId
@@ -192,6 +200,20 @@ run clientId (M f) = f mempty mempty clientId >>= \case
   Left e -> pure (Left e)
   Right (Result _ a) -> pure (Right a)
 
+-- | Get the hostname used for the connection.
+lookupHostname :: Fin n -> M e n Text
+lookupHostname (Fin ix _) = M $ \ixs envs _ -> runExceptT $ do
+  let !envIx = PM.indexPrimArray ixs (Nat.demote ix)
+  let Env host _ _ _ = PM.indexSmallArray envs envIx
+  pure (Result envs host)
+
+-- | Get the hostname used for the connection.
+lookupPort :: Fin n -> M e n Word16
+lookupPort (Fin ix _) = M $ \ixs envs _ -> runExceptT $ do
+  let !envIx = PM.indexPrimArray ixs (Nat.demote ix)
+  let Env _ thePort _ _ = PM.indexSmallArray envs envIx
+  pure (Result envs thePort)
+
 -- An exchange of raw bytes. No encoding or decoding is performed. We return
 -- the correlation ID used in the exchange so that, in the event of a decode
 -- failure, the correlation ID is available for inclusion.
@@ -204,7 +226,7 @@ exchangeBytes ::
   -> M e n (Correlated Bytes) -- Response bytes (after stripping response header) and the correlation id
 exchangeBytes (Fin ix _) !key !version !respHeaderVersion inner = M $ \ixs envs clientId -> runExceptT $ do
   let !envIx = PM.indexPrimArray ixs (Nat.demote ix)
-  let Env host port resource corrId = PM.indexSmallArray envs envIx
+  let Env host thePort resource corrId = PM.indexSmallArray envs envIx
   let !hdr = Message.Request.Header
         { apiKey = key
         , apiVersion = version
@@ -218,31 +240,31 @@ exchangeBytes (Fin ix _) !key !version !respHeaderVersion inner = M $ \ixs envs 
   let enc = Message.Request.toChunks req
   ExceptT $ ChannelSig.send resource enc >>= \case
     Right (_ :: ()) -> pure (Right ())
-    Left e -> pure (Left (Communicate $ CommunicationException key corrId (Send e)))
+    Left e -> pure (Left (Communicate $ CommunicationException key host thePort corrId (Send e)))
   rawSz <- ExceptT $ ChannelSig.receiveExactly resource 4 >>= \case
     Right rawSz -> pure (Right rawSz)
-    Left e -> pure (Left (Communicate $ CommunicationException key corrId (Receive e)))
+    Left e -> pure (Left (Communicate $ CommunicationException key host thePort corrId (Receive e)))
   let sz = BigEndian.indexByteArray rawSz 0 :: Int32
-  when (sz < 0) (throwE (Communicate $ CommunicationException key corrId (Protocol Types.ResponseLengthNegative)))
+  when (sz < 0) (throwE (Communicate $ CommunicationException key host thePort corrId (Protocol Types.ResponseLengthNegative)))
   -- Technically, there's nothing wrong with a response that is
   -- larger than 512MB. It's just not going to happen in practice.
-  when (sz >= 512_000_000) (throwE (Communicate $ CommunicationException key corrId (Protocol Types.ResponseLengthTooHigh)))
+  when (sz >= 512_000_000) (throwE (Communicate $ CommunicationException key host thePort corrId (Protocol Types.ResponseLengthTooHigh)))
   byteArray <- ExceptT $ ChannelSig.receiveExactly resource (fromIntegral sz) >>= \case
     Right byteArray -> pure (Right byteArray)
-    Left e -> pure (Left (Communicate $ CommunicationException key corrId (Receive e)))
+    Left e -> pure (Left (Communicate $ CommunicationException key host thePort corrId (Receive e)))
   payload <- case respHeaderVersion of
     0 ->  case Parser.parseByteArray (Header.Response.V0.parser Ctx.Top) byteArray of
-      Parser.Failure _ -> throwE (Communicate $ CommunicationException key corrId (Protocol Types.ResponseHeaderMalformed))
+      Parser.Failure _ -> throwE (Communicate $ CommunicationException key host thePort corrId (Protocol Types.ResponseHeaderMalformed))
       Parser.Success (Parser.Slice off len respHdr) -> if respHdr.correlationId == corrId
         then pure (Bytes byteArray off len)
-        else throwE (Communicate $ CommunicationException key corrId (Protocol Types.ResponseHeaderIncorrectCorrelationId))
+        else throwE (Communicate $ CommunicationException key host thePort corrId (Protocol Types.ResponseHeaderIncorrectCorrelationId))
     1 -> case Parser.parseByteArray (Header.Response.V1.parser Ctx.Top) byteArray of
-      Parser.Failure _ -> throwE (Communicate $ CommunicationException key corrId (Protocol Types.ResponseHeaderMalformed))
+      Parser.Failure _ -> throwE (Communicate $ CommunicationException key host thePort corrId (Protocol Types.ResponseHeaderMalformed))
       Parser.Success (Parser.Slice off len respHdr) -> if respHdr.correlationId == corrId
         then pure (Bytes byteArray off len)
-        else throwE (Communicate $ CommunicationException key corrId (Protocol Types.ResponseHeaderIncorrectCorrelationId))
+        else throwE (Communicate $ CommunicationException key host thePort corrId (Protocol Types.ResponseHeaderIncorrectCorrelationId))
     _ -> errorWithoutStackTrace "kafka-exchange: huge mistake, expecting a response header version other than 0 or 1"
-  let !newEnv = Env host port resource (corrId + 1)
+  let !newEnv = Env host thePort resource (corrId + 1)
   let envs' = C.replaceAt envs envIx newEnv
   pure (Result envs' (Correlated corrId payload))
 
@@ -254,6 +276,35 @@ throw ::
      KafkaException e -- ^ The exception to throw
   -> M e n a
 throw e = M $ \_ _ _ -> pure (Left e)
+
+throwProtocolException ::
+     Fin n
+  -> ApiKey -- ^ API Key of Request
+  -> Int32 -- ^ Correlation ID
+  -> ProtocolException -- ^ The exception to throw
+  -> M e n a
+throwProtocolException !fin !k !corrId e = do
+  theHost <- lookupHostname fin
+  thePort <- lookupPort fin
+  throw
+    $ Communicate
+    $ CommunicationException k theHost thePort corrId
+    $ Protocol e
+
+throwErrorCode ::
+     Fin n
+  -> ApiKey -- ^ API Key of Request
+  -> Int32 -- ^ Correlation ID
+  -> Context
+  -> ErrorCode -- ^ The exception to throw
+  -> M e n a
+throwErrorCode !fin !k !corrId ctx e = do
+  theHost <- lookupHostname fin
+  thePort <- lookupPort fin
+  throw
+    $ Communicate
+    $ CommunicationException k theHost thePort corrId
+    $ ErrorCode ctx e
 
 substitute :: (m :=: n) -> M e m a -> M e n a
 {-# inline substitute #-}

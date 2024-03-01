@@ -31,7 +31,7 @@ module Kafka.Exchange
   , bootstrap
   ) where
 
-import Chan (M,KafkaException(..),CommunicationException(..),Description(..),run,with,throw,lift,substitute)
+import Chan (M,KafkaException(..),CommunicationException(..),Description(..),run,with,throw,lift,substitute,throwProtocolException,throwErrorCode)
 import Arithmetic.Types (Fin(Fin))
 import Kafka.Exchange.Types (ProtocolException(ResponseArityMismatch))
 import Kafka.Exchange.Types (Correlated(Correlated),Broker(Broker))
@@ -105,18 +105,14 @@ findCoordinatorSingleton fin cgname = do
     , coordinatorKeys = Contiguous.singleton cgname
     }
   if PM.sizeofSmallArray resp1.coordinators /= 1
-    then Chan.throw $ Communicate $ CommunicationException
-      ApiKey.FindCoordinator
-      corrId
-      (Chan.Protocol ResponseArityMismatch)
+    then throwProtocolException fin ApiKey.FindCoordinator corrId ResponseArityMismatch
     else do
       let coord = PM.indexSmallArray resp1.coordinators 0
        in case coord.errorCode of 
             None -> pure coord
-            e -> Chan.throw $ Communicate $ CommunicationException
-              ApiKey.FindCoordinator
-              corrId
-              (ErrorCode (Index 0 (Field Ctx.Coordinators Top)) e)
+            e -> throwErrorCode
+              fin ApiKey.FindCoordinator corrId
+              (Index 0 (Field Ctx.Coordinators Top)) e
 
 -- | Builds a produce request for a single partition, issues the request,
 -- parses the response, asserts that the response contains exactly one
@@ -137,17 +133,11 @@ produceSingleton !fin !acks !timeoutMs !topicName !partitionIx records = do
   let req = Request.Produce.singleton acks timeoutMs topicName partitionIx records
   Correlated corrId resp <- Produce.exchange fin req
   if PM.sizeofSmallArray resp.topics /= 1
-    then Chan.throw
-      $ Communicate
-      $ CommunicationException ApiKey.Produce corrId
-      $ Chan.Protocol ResponseArityMismatch
+    then throwProtocolException fin ApiKey.Produce corrId ResponseArityMismatch
     else do
       let topic = PM.indexSmallArray resp.topics 0
        in if PM.sizeofSmallArray topic.partitions /= 1
-            then Chan.throw
-              $ Communicate
-              $ CommunicationException ApiKey.Produce corrId
-              $ Chan.Protocol ResponseArityMismatch
+            then throwProtocolException fin ApiKey.Produce corrId ResponseArityMismatch
             else do
               let !(# partition #) = PM.indexSmallArray## topic.partitions 0
                in pure partition
@@ -162,10 +152,7 @@ initProducerIdNontransactional fin = do
     Request.InitProducerId.request
   case resp.errorCode of 
     None -> pure resp
-    e -> Chan.throw $ Communicate $ CommunicationException
-      ApiKey.InitProducerId
-      corrId
-      (ErrorCode Top e)
+    e -> throwErrorCode fin ApiKey.InitProducerId corrId Top e
 
 -- | Discover all brokers and all topics in the cluster.
 -- Checks the error codes on all topics and partitions.
@@ -173,11 +160,8 @@ metadataAll :: Fin n -> M e n Metadata.Response
 metadataAll fin = do
   Correlated corrId resp <- Metadata.exchange fin Request.Metadata.all
   case Response.Metadata.findErrorCode resp of
-    Just (ContextualizedErrorCode ctx e) ->
-      Chan.throw $ Communicate $ CommunicationException
-        ApiKey.InitProducerId
-        corrId
-        (ErrorCode ctx e)
+    Just (ContextualizedErrorCode ctx e) -> do
+      throwErrorCode fin ApiKey.InitProducerId corrId ctx e
     Nothing -> pure resp
 
 -- | Inspect a single topic by name or by UUID with a metadata request.
@@ -192,18 +176,12 @@ metadataOneAutoCreate fin !topicName = do
     }
   case Response.Metadata.findErrorCode resp of
     Just (ContextualizedErrorCode ctx e) ->
-      Chan.throw $ Communicate $ CommunicationException
-        ApiKey.InitProducerId
-        corrId
-        (ErrorCode ctx e)
+      throwErrorCode fin ApiKey.InitProducerId corrId ctx e
     Nothing -> case PM.sizeofSmallArray resp.topics of
       1 -> do
         let topic = PM.indexSmallArray resp.topics 0
         pure topic
-      _ -> Chan.throw
-        $ Communicate
-        $ CommunicationException ApiKey.Produce corrId
-        $ Chan.Protocol ResponseArityMismatch
+      _ -> Chan.throwProtocolException fin ApiKey.Produce corrId ResponseArityMismatch
 
 -- | Call 'metadataAll' on each broker in the list until
 -- a broker responds. Operates in the base monad and does

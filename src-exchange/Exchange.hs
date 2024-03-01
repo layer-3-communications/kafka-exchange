@@ -15,7 +15,7 @@ module Exchange
   ) where
 
 import Communication (Request,Response)
-import Channel (M,KafkaException(..),Description(..),CommunicationException(..))
+import Channel (M,KafkaException(..),Description(..),CommunicationException(..),lookupHostname,lookupPort)
 import Arithmetic.Types (Fin)
 import Kafka.Exchange.Types (Correlated(Correlated))
 
@@ -31,7 +31,10 @@ exchange fin inner = do
   Correlated corrId payload <- Channel.exchangeBytes fin Communication.apiKey
     Communication.apiVersion Communication.responseHeaderVersion (Communication.toChunks inner)
   case Communication.decode payload of
-    Left _ -> Channel.throw (Communicate (CommunicationException Communication.apiKey corrId (Protocol Types.ResponseBodyMalformed)))
+    Left _ -> do
+      host <- lookupHostname fin
+      thePort <- lookupPort fin
+      Channel.throw (Communicate (CommunicationException Communication.apiKey host thePort corrId (Protocol Types.ResponseBodyMalformed)))
     Right r -> pure (Correlated corrId r)
 
 -- | Variant of exchange that discards the correlation id.
