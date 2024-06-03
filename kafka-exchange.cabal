@@ -46,6 +46,10 @@ library types
     , Kafka.OffsetFetch.V8 as Kafka.OffsetFetch
     , Kafka.Heartbeat.V4 as Kafka.Heartbeat
     , Kafka.LeaveGroup.V5 as Kafka.LeaveGroup
+    , Kafka.Fetch.Request.V13 as Request.Fetch
+    , Kafka.Fetch.Response.V13 as Response.Fetch
+    , Kafka.ListOffsets.Request.V7 as Request.ListOffsets
+    , Kafka.ListOffsets.Response.V7 as Response.ListOffsets
 
 library channel
   visibility: private

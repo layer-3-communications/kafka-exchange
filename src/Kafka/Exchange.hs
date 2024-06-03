@@ -11,10 +11,13 @@ module Kafka.Exchange
   , Broker(..)
   , KafkaException(..)
   , CommunicationException(..)
+  , ProtocolException(..)
   , Description(..)
   , run
   , with
   , throw
+  , throwErrorCode
+  , throwProtocolException
   , lift
   , substitute
     -- * Standard Exchanges
@@ -22,19 +25,24 @@ module Kafka.Exchange
   , findCoordinator
   , initProducerId
   , metadata
+  , fetch
+  , listOffsets
     -- * Derived Exchanges
   , findCoordinatorSingleton
   , initProducerIdNontransactional
   , metadataAll
+  , metadataOne
   , metadataOneAutoCreate
   , produceSingleton
   , bootstrap
+  , bootstrapOne
+  , listOffsetsOnePartition
   ) where
 
 import Chan (M,KafkaException(..),CommunicationException(..),Description(..),run,with,throw,lift,substitute,throwProtocolException,throwErrorCode)
 import Arithmetic.Types (Fin(Fin))
-import Kafka.Exchange.Types (ProtocolException(ResponseArityMismatch))
-import Kafka.Exchange.Types (Correlated(Correlated),Broker(Broker))
+import Kafka.Exchange.Types (ProtocolException(..))
+import Kafka.Exchange.Types (Correlated(Correlated),Broker(..))
 import Data.Text (Text)
 import Data.Int (Int32)
 import Data.Primitive (SmallArray)
@@ -47,10 +55,12 @@ import qualified ChannelSig
 import qualified Arithmetic.Lt as Lt
 import qualified Arithmetic.Nat as Nat
 import qualified Kafka.Parser.Context as Ctx
+import qualified Fetch
 import qualified Produce
 import qualified FindCoordinator
 import qualified InitProducerId
 import qualified Metadata
+import qualified ListOffsets
 import qualified Data.Primitive as PM
 import qualified Data.Primitive.Contiguous as Contiguous
 import qualified Kafka.ApiKey as ApiKey
@@ -62,6 +72,10 @@ import qualified Request.Metadata
 import qualified Response.Metadata
 import qualified Request.Produce
 import qualified Response.Produce
+import qualified Request.Fetch
+import qualified Response.Fetch
+import qualified Request.ListOffsets
+import qualified Response.ListOffsets
 import qualified Kafka.RecordBatch.Request
 
 produce ::
@@ -88,6 +102,18 @@ metadata ::
   -> M e n Metadata.Response
 metadata = Metadata.exchange_
 
+fetch ::
+     Fin n
+  -> Fetch.Request
+  -> M e n Fetch.Response
+fetch = Fetch.exchange_
+
+listOffsets ::
+     Fin n
+  -> ListOffsets.Request
+  -> M e n ListOffsets.Response
+listOffsets = ListOffsets.exchange_
+
 -- | This uses key type 0 for the consumer group key type. It does not
 -- appear that any other key types are ever used. A find-coordinator
 -- request only takes a key type and an array of consumer group names.
@@ -113,6 +139,28 @@ findCoordinatorSingleton fin cgname = do
             e -> throwErrorCode
               fin ApiKey.FindCoordinator corrId
               (Index 0 (Field Ctx.Coordinators Top)) e
+
+listOffsetsOnePartition ::
+     Fin n
+  -> Text -- topic name
+  -> Request.ListOffsets.Partition -- partition
+  -> M e n Response.ListOffsets.Partition
+listOffsetsOnePartition !fin !topicName reqPrt = do
+  let req = Request.ListOffsets.Request (-1) 0 $! Contiguous.singleton $! Request.ListOffsets.Topic topicName $! Contiguous.singleton reqPrt
+  Correlated corrId resp <- ListOffsets.exchange fin req
+  if PM.sizeofSmallArray resp.topics /= 1
+    then throwProtocolException fin ApiKey.ListOffsets corrId ResponseArityMismatch
+    else do
+      let t = PM.indexSmallArray resp.topics 0
+      if PM.sizeofSmallArray t.partitions /= 1
+        then throwProtocolException fin ApiKey.ListOffsets corrId ResponseArityMismatch
+        else do
+          let respPrt = PM.indexSmallArray t.partitions 0
+          case respPrt.errorCode of
+            None -> pure respPrt
+            e -> throwErrorCode
+              fin ApiKey.ListOffsets corrId
+              (Index 0 (Field Ctx.Partitions (Index 0 (Field Ctx.Topics Top)))) e
 
 -- | Builds a produce request for a single partition, issues the request,
 -- parses the response, asserts that the response contains exactly one
@@ -161,8 +209,29 @@ metadataAll fin = do
   Correlated corrId resp <- Metadata.exchange fin Request.Metadata.all
   case Response.Metadata.findErrorCode resp of
     Just (ContextualizedErrorCode ctx e) -> do
-      throwErrorCode fin ApiKey.InitProducerId corrId ctx e
+      throwErrorCode fin ApiKey.Metadata corrId ctx e
     Nothing -> pure resp
+
+-- Shared by both the auto-create and the no-auto-create variant.
+finishMetadataOne :: Fin n -> Int32 -> Response.Metadata.Response -> M e n Response.Metadata.Topic
+finishMetadataOne fin !corrId resp = case Response.Metadata.findErrorCode resp of
+  Just (ContextualizedErrorCode ctx e) ->
+    throwErrorCode fin ApiKey.Metadata corrId ctx e
+  Nothing -> case PM.sizeofSmallArray resp.topics of
+    1 -> do
+      let topic = PM.indexSmallArray resp.topics 0
+      pure topic
+    _ -> Chan.throwProtocolException fin ApiKey.Produce corrId ResponseArityMismatch
+
+-- | Variant of 'metadataOneAutoCreate' that does not auto create the topic.
+metadataOne :: Fin n -> Request.Metadata.Topic -> M e n Response.Metadata.Topic
+metadataOne fin !topicName = do
+  Correlated corrId resp <- Metadata.exchange fin Request.Metadata.Request
+    { topics = Just $! Contiguous.singleton topicName
+    , allowAutoTopicCreation = False
+    , includeTopicAuthorizedOperations = False
+    }
+  finishMetadataOne fin corrId resp
 
 -- | Inspect a single topic by name or by UUID with a metadata request.
 -- Topic auto creation is enabled. Only returns the information about
@@ -174,18 +243,13 @@ metadataOneAutoCreate fin !topicName = do
     , allowAutoTopicCreation = True
     , includeTopicAuthorizedOperations = False
     }
-  case Response.Metadata.findErrorCode resp of
-    Just (ContextualizedErrorCode ctx e) ->
-      throwErrorCode fin ApiKey.InitProducerId corrId ctx e
-    Nothing -> case PM.sizeofSmallArray resp.topics of
-      1 -> do
-        let topic = PM.indexSmallArray resp.topics 0
-        pure topic
-      _ -> Chan.throwProtocolException fin ApiKey.Produce corrId ResponseArityMismatch
+  finishMetadataOne fin corrId resp
 
 -- | Call 'metadataAll' on each broker in the list until
 -- a broker responds. Operates in the base monad and does
 -- not persist any connections.
+--
+-- Returns metadata about all partitions of all topics.
 bootstrap :: 
      Text -- ^ Client id
   -> SmallArray Broker
@@ -195,6 +259,31 @@ bootstrap !clientId !brokers = go 0 where
     then do
       e <- run clientId $ with (PM.indexSmallArray brokers ix) $ do
         metadataAll (Fin Nat.zero Lt.constant)
+      case e of
+        Left{} -> go (ix + 1)
+        Right r -> pure (Right r)
+    else pure (Left ())
+
+-- | Variant of bootstrap that asks about a single topic in the @Metadata@
+-- request. Does not use auto create. Extracts the sole topic from the response,
+-- failing if there is not exactly one topic in the response. Returns the
+-- full response as well as the one topic.
+bootstrapOne ::
+     Text -- ^ Client id
+  -> Request.Metadata.Topic -- ^ Topic name
+  -> SmallArray Broker
+  -> ChannelSig.M (Either () (Response.Metadata.Response, Response.Metadata.Topic))
+bootstrapOne !clientId !topicName !brokers = go 0 where
+  go !ix = if ix < PM.sizeofSmallArray brokers
+    then do
+      e <- run clientId $ with (PM.indexSmallArray brokers ix) $ do
+        Correlated corrId resp <- Metadata.exchange (Fin Nat.zero Lt.constant) Request.Metadata.Request
+          { topics = Just $! Contiguous.singleton topicName
+          , allowAutoTopicCreation = False
+          , includeTopicAuthorizedOperations = False
+          }
+        soleTopic <- finishMetadataOne (Fin Nat.zero Lt.constant) corrId resp
+        pure (resp,soleTopic)
       case e of
         Left{} -> go (ix + 1)
         Right r -> pure (Right r)
