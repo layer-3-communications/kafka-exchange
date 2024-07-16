@@ -65,7 +65,10 @@ import qualified Kafka.Exchange.Types as Types
 -- | The type @e@ is a way for anything that builds on top of this
 -- to introduce additional exceptions.
 data KafkaException e
-  = Connect !ConnectException
+  = Connect
+      !Text -- broker hostname
+      !Word16 -- broker port
+      !ConnectException -- error while connecting (often errno from connect)
   | Communicate !CommunicationException
   | Application !e
 
@@ -74,8 +77,8 @@ instance Show e => Show (KafkaException e) where
     (showString "Communicate " . showsPrec 11 e)
   showsPrec d (Application e) = showParen (d > 10)         
     (showString "Application " . showsPrec 11 e)
-  showsPrec d (Connect e) = showParen (d > 10)
-    (showString "Connect " . ChannelSig.showsPrecConnectException 11 e)
+  showsPrec d (Connect host thePort e) = showParen (d > 10)
+    (showString "Connect " . shows host . showChar ' ' . shows thePort . showChar ' ' . ChannelSig.showsPrecConnectException 11 e)
 
 data CommunicationException = CommunicationException
   { apiKey :: !ApiKey
@@ -170,7 +173,7 @@ with ::
 with (Broker host thePort) (M f) = M $ \ixs envs clientId ->
   case C.findIndex (\(Env existingHost existingPort _ _) -> existingHost == host && existingPort == thePort) envs of
     Nothing -> ChannelSig.withConnection host thePort $ \r -> case r of
-      Left e -> pure (Left (Connect e))
+      Left e -> pure (Left (Connect host thePort e))
       Right resource ->
         let !env = Env host thePort resource 0
             !envs' = C.insertAt envs (C.size envs) env
