@@ -31,6 +31,7 @@ module Kafka.Exchange
   , findCoordinatorSingleton
   , initProducerIdNontransactional
   , metadataAll
+  , metadataNone
   , metadataOne
   , metadataOneAutoCreate
   , produceSingleton
@@ -211,6 +212,12 @@ metadataAll fin = do
     Just (ContextualizedErrorCode ctx e) -> do
       throwErrorCode fin ApiKey.Metadata corrId ctx e
     Nothing -> pure resp
+
+-- | Discover all brokers in the cluster. Does not request any information
+-- about topics. This does not check any error codes because the only error
+-- codes in a metadata response are associated with topics and partitions.
+metadataNone :: Fin n -> M e n Metadata.Response
+metadataNone fin = Metadata.exchange_ fin Request.Metadata.none
 
 -- Shared by both the auto-create and the no-auto-create variant.
 finishMetadataOne :: Fin n -> Int32 -> Response.Metadata.Response -> M e n Response.Metadata.Topic
