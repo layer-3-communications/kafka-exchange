@@ -41,7 +41,8 @@ module Kafka.Exchange
   ) where
 
 import Chan (M,KafkaException(..),CommunicationException(..),Description(..),run,with,throw,lift,substitute,throwProtocolException,throwErrorCode)
-import Arithmetic.Types (Fin(Fin))
+import Arithmetic.Types (Fin(Fin),Fin#)
+import Arithmetic.Nat (pattern N0#)
 import Kafka.Exchange.Types (ProtocolException(..))
 import Kafka.Exchange.Types (Correlated(Correlated),Broker(..))
 import Data.Text (Text)
@@ -53,6 +54,7 @@ import Kafka.ErrorCode (pattern None)
 import Kafka.Acknowledgments (Acknowledgments)
 
 import qualified ChannelSig
+import qualified Arithmetic.Fin as Fin
 import qualified Arithmetic.Lt as Lt
 import qualified Arithmetic.Nat as Nat
 import qualified Kafka.Parser.Context as Ctx
@@ -80,37 +82,37 @@ import qualified Response.ListOffsets
 import qualified Kafka.RecordBatch.Request
 
 produce ::
-     Fin n
+     Fin# n
   -> Produce.Request
   -> M e n Produce.Response
 produce = Produce.exchange_
 
 initProducerId ::
-     Fin n
+     Fin# n
   -> InitProducerId.Request
   -> M e n InitProducerId.Response
 initProducerId = InitProducerId.exchange_
 
 findCoordinator ::
-     Fin n
+     Fin# n
   -> FindCoordinator.Request
   -> M e n FindCoordinator.Response
 findCoordinator = FindCoordinator.exchange_
 
 metadata ::
-     Fin n
+     Fin# n
   -> Metadata.Request
   -> M e n Metadata.Response
 metadata = Metadata.exchange_
 
 fetch ::
-     Fin n
+     Fin# n
   -> Fetch.Request
   -> M e n Fetch.Response
 fetch = Fetch.exchange_
 
 listOffsets ::
-     Fin n
+     Fin# n
   -> ListOffsets.Request
   -> M e n ListOffsets.Response
 listOffsets = ListOffsets.exchange_
@@ -123,7 +125,7 @@ listOffsets = ListOffsets.exchange_
 --
 -- This checks that no error code is associated with the coordinator.
 findCoordinatorSingleton ::
-     Fin n
+     Fin# n
   -> Text -- ^ Consumer group name
   -> M e n Response.FindCoordinator.Coordinator
 findCoordinatorSingleton fin cgname = do
@@ -142,7 +144,7 @@ findCoordinatorSingleton fin cgname = do
               (Index 0 (Field Ctx.Coordinators Top)) e
 
 listOffsetsOnePartition ::
-     Fin n
+     Fin# n
   -> Text -- topic name
   -> Request.ListOffsets.Partition -- partition
   -> M e n Response.ListOffsets.Partition
@@ -171,7 +173,7 @@ listOffsetsOnePartition !fin !topicName reqPrt = do
 -- fields. The user would lose information about the failure if we attempted
 -- to handle it here.
 produceSingleton ::
-     Fin n
+     Fin# n
   -> Acknowledgments -- ^ Acknowledgements
   -> Int32 -- ^ Timeout milliseconds
   -> Text -- ^ Topic name
@@ -194,7 +196,7 @@ produceSingleton !fin !acks !timeoutMs !topicName !partitionIx records = do
 -- | Requests a producer id for a nontransactional producer. Checks the
 -- error code, so you don't need to recheck it after calling this function.
 initProducerIdNontransactional ::
-     Fin n 
+     Fin# n 
   -> M e n InitProducerId.Response
 initProducerIdNontransactional fin = do
   Correlated corrId resp <- InitProducerId.exchange fin
@@ -205,7 +207,7 @@ initProducerIdNontransactional fin = do
 
 -- | Discover all brokers and all topics in the cluster.
 -- Checks the error codes on all topics and partitions.
-metadataAll :: Fin n -> M e n Metadata.Response
+metadataAll :: Fin# n -> M e n Metadata.Response
 metadataAll fin = do
   Correlated corrId resp <- Metadata.exchange fin Request.Metadata.all
   case Response.Metadata.findErrorCode resp of
@@ -216,11 +218,11 @@ metadataAll fin = do
 -- | Discover all brokers in the cluster. Does not request any information
 -- about topics. This does not check any error codes because the only error
 -- codes in a metadata response are associated with topics and partitions.
-metadataNone :: Fin n -> M e n Metadata.Response
+metadataNone :: Fin# n -> M e n Metadata.Response
 metadataNone fin = Metadata.exchange_ fin Request.Metadata.none
 
 -- Shared by both the auto-create and the no-auto-create variant.
-finishMetadataOne :: Fin n -> Int32 -> Response.Metadata.Response -> M e n Response.Metadata.Topic
+finishMetadataOne :: Fin# n -> Int32 -> Response.Metadata.Response -> M e n Response.Metadata.Topic
 finishMetadataOne fin !corrId resp = case Response.Metadata.findErrorCode resp of
   Just (ContextualizedErrorCode ctx e) ->
     throwErrorCode fin ApiKey.Metadata corrId ctx e
@@ -231,7 +233,7 @@ finishMetadataOne fin !corrId resp = case Response.Metadata.findErrorCode resp o
     _ -> Chan.throwProtocolException fin ApiKey.Produce corrId ResponseArityMismatch
 
 -- | Variant of 'metadataOneAutoCreate' that does not auto create the topic.
-metadataOne :: Fin n -> Request.Metadata.Topic -> M e n Response.Metadata.Topic
+metadataOne :: Fin# n -> Request.Metadata.Topic -> M e n Response.Metadata.Topic
 metadataOne fin !topicName = do
   Correlated corrId resp <- Metadata.exchange fin Request.Metadata.Request
     { topics = Just $! Contiguous.singleton topicName
@@ -243,7 +245,7 @@ metadataOne fin !topicName = do
 -- | Inspect a single topic by name or by UUID with a metadata request.
 -- Topic auto creation is enabled. Only returns the information about
 -- the single topic, discarding information about the brokers.
-metadataOneAutoCreate :: Fin n -> Request.Metadata.Topic -> M e n Response.Metadata.Topic
+metadataOneAutoCreate :: Fin# n -> Request.Metadata.Topic -> M e n Response.Metadata.Topic
 metadataOneAutoCreate fin !topicName = do
   Correlated corrId resp <- Metadata.exchange fin Request.Metadata.Request
     { topics = Just $! Contiguous.singleton topicName
@@ -265,7 +267,7 @@ bootstrap !clientId !brokers = go 0 where
   go !ix = if ix < PM.sizeofSmallArray brokers
     then do
       e <- run clientId $ with (PM.indexSmallArray brokers ix) $ do
-        metadataAll (Fin Nat.zero Lt.constant)
+        metadataAll (Fin.greatest# N0#)
       case e of
         Left{} -> go (ix + 1)
         Right r -> pure (Right r)
@@ -284,12 +286,12 @@ bootstrapOne !clientId !topicName !brokers = go 0 where
   go !ix = if ix < PM.sizeofSmallArray brokers
     then do
       e <- run clientId $ with (PM.indexSmallArray brokers ix) $ do
-        Correlated corrId resp <- Metadata.exchange (Fin Nat.zero Lt.constant) Request.Metadata.Request
+        Correlated corrId resp <- Metadata.exchange (Fin.greatest# Nat.N0#) Request.Metadata.Request
           { topics = Just $! Contiguous.singleton topicName
           , allowAutoTopicCreation = False
           , includeTopicAuthorizedOperations = False
           }
-        soleTopic <- finishMetadataOne (Fin Nat.zero Lt.constant) corrId resp
+        soleTopic <- finishMetadataOne (Fin.greatest# N0#) corrId resp
         pure (resp,soleTopic)
       case e of
         Left{} -> go (ix + 1)

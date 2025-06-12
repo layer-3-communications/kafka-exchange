@@ -57,7 +57,7 @@ library channel
     , base >= 4.11.1.0 && <5
     , kafka-interchange
     , text >=2.0
-    , byteslice >=0.2.8
+    , byteslice >=0.2.15
     , primitive >=0.8
     , transformers >=0.5.6
     , kafka-exchange:types
@@ -65,6 +65,7 @@ library channel
     , byte-order >=0.1.3
     , contiguous >=0.6.4
     , bytesmith >=0.3.9
+    , vext >=0.1.8
   signatures:
     ChannelSig
   exposed-modules:
