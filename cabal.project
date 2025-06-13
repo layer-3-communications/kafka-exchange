@@ -1,2 +1,6 @@
 with-compiler: ghc-9.8.4
 packages: .
+source-repository-package
+  type: git
+  location: https://github.com/layer-3-communications/kafka-interchange.git
+  tag: 0d9afc9fd020824c89b557e982bfe3785066de44

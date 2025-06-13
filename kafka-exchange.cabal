@@ -27,12 +27,12 @@ library types
   -- Strip version numbers from Kafka modules
   reexported-modules:
     , Kafka.ApiVersions.V3 as Kafka.ApiVersions
-    , Kafka.Metadata.V12 as Kafka.Metadata
+    , Kafka.Metadata.V11 as Kafka.Metadata
     , Kafka.InitProducerId.V4 as Kafka.InitProducerId
     , Kafka.InitProducerId.Request.V4 as Request.InitProducerId
     , Kafka.InitProducerId.Response.V4 as Response.InitProducerId
-    , Kafka.Metadata.Request.V12 as Request.Metadata
-    , Kafka.Metadata.Response.V12 as Response.Metadata
+    , Kafka.Metadata.Request.V11 as Request.Metadata
+    , Kafka.Metadata.Response.V11 as Response.Metadata
     , Kafka.Produce.V9 as Kafka.Produce
     , Kafka.Produce.Request.V9 as Request.Produce
     , Kafka.Produce.Response.V9 as Response.Produce
