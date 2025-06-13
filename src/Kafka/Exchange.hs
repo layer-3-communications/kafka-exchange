@@ -281,7 +281,7 @@ bootstrapOne ::
      Text -- ^ Client id
   -> Request.Metadata.Topic -- ^ Topic name
   -> SmallArray Broker
-  -> ChannelSig.M (Either () (Response.Metadata.Response, Response.Metadata.Topic))
+  -> ChannelSig.M (Either (KafkaException ()) (Response.Metadata.Response, Response.Metadata.Topic))
 bootstrapOne !clientId !topicName !brokers = go 0 where
   go !ix = if ix < PM.sizeofSmallArray brokers
     then do
@@ -294,6 +294,8 @@ bootstrapOne !clientId !topicName !brokers = go 0 where
         soleTopic <- finishMetadataOne (Fin.greatest# N0#) corrId resp
         pure (resp,soleTopic)
       case e of
-        Left{} -> go (ix + 1)
+        Left e' -> if ix == PM.sizeofSmallArray brokers
+          then pure (Left e')
+          else go (ix + 1)
         Right r -> pure (Right r)
-    else pure (Left ())
+    else pure (Left (Application ()))
