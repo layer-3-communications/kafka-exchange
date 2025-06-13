@@ -294,7 +294,7 @@ bootstrapOne !clientId !topicName !brokers = go 0 where
         soleTopic <- finishMetadataOne (Fin.greatest# N0#) corrId resp
         pure (resp,soleTopic)
       case e of
-        Left e' -> if ix == PM.sizeofSmallArray brokers
+        Left e' -> if ix + 1 == PM.sizeofSmallArray brokers
           then pure (Left e')
           else go (ix + 1)
         Right r -> pure (Right r)
