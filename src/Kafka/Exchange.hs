@@ -29,6 +29,7 @@ module Kafka.Exchange
   , initProducerId
   , metadata
   , fetch
+  , fetchV12
   , listOffsets
     -- * Derived Exchanges
   , findCoordinatorSingleton
@@ -63,6 +64,7 @@ import qualified Arithmetic.Lt as Lt
 import qualified Arithmetic.Nat as Nat
 import qualified Kafka.Parser.Context as Ctx
 import qualified Fetch
+import qualified FetchV12
 import qualified Produce
 import qualified FindCoordinator
 import qualified InitProducerId
@@ -114,6 +116,12 @@ fetch ::
   -> Fetch.Request
   -> M e n Fetch.Response
 fetch = Fetch.exchange_
+
+fetchV12 ::
+     Fin# n
+  -> FetchV12.Request
+  -> M e n FetchV12.Response
+fetchV12 = FetchV12.exchange_
 
 listOffsets ::
      Fin# n
