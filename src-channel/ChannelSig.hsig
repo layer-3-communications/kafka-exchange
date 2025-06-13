@@ -31,6 +31,12 @@ instance Monad M
 
 data Resource :: Type
 
+-- | Connect to a broker.
+connect :: 
+     Text -- hostname
+  -> Word16 -- port
+  -> M (Either ConnectException Resource)
+
 -- | The connection is scoped. Performs hostname resolution. The
 -- implementation must close the resource after the callback completes.
 -- The close operation does not have a way to indicate recoverable

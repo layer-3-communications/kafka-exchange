@@ -18,7 +18,10 @@
 
 module Channel
   ( M
+  , Env
+  , openEnvironment
   , run
+  , runWithEnv
   , with
   , withExisting
   , throw
@@ -127,9 +130,15 @@ data Env = Env
   !Resource -- probably a socket
   !Int32 -- correlation id
 
-data M :: Type -> Nat -> Type -> Type where
-  -- x M :: forall (e :: Type) (n :: Nat) (a :: Type) (m :: Nat).
-  -- x   (    Nat# n
+-- | Make an environment.
+openEnvironment :: Text -> Word16 -> ChannelSig.M (Either ConnectException Env)
+openEnvironment !theHostname !thePort = do
+  ChannelSig.connect theHostname thePort >>= \case
+    Left err -> pure (Left err)
+    Right resource -> do
+      pure $! Right $! Env theHostname thePort resource 0
+
+newtype M :: Type -> Nat -> Type -> Type where
   M :: forall (e :: Type) (n :: Nat) (a :: Type).
     ( forall (m :: Nat).
          Nat# n
@@ -231,11 +240,27 @@ withExisting _ _ = error "withExisting: write this. I don't actually need it yet
 
 run ::
      Text -- ^ Client id
-  -> M e 0 a -- ^ Context with zero connections 
+  -> M e 0 a -- ^ Context with zero connections
   -> ChannelSig.M (Either (KafkaException e) a)
 run clientId (M f) = f N0# Int.empty Lifted.empty clientId >>= \case
   Left e -> pure (Left e)
   Right (Result _ a) -> pure (Right a)
+
+-- | Returns the updated environment with a new correlation id when
+-- it finishes.
+runWithEnv ::
+     Text -- ^ Client id
+  -> Env -- ^ Initial environment
+  -> M e 1 a -- ^ Context with zero connections 
+  -> ChannelSig.M (Either (KafkaException e) (Env, a))
+runWithEnv clientId env (M f) = do
+  let !envs = Lifted.construct1 env
+  let !ixs = Int.construct1 (Fin.greatest# N0#)
+  f N1# ixs envs clientId >>= \case
+    Left e -> pure (Left e)
+    Right (Result envs' a) -> do
+      let env' = Lifted.index0 envs'
+      pure (Right (env', a))
 
 -- | Get the hostname used for the connection.
 lookupHostname :: Fin# n -> M e n Text
