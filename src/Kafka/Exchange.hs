@@ -8,12 +8,15 @@
 
 module Kafka.Exchange
   ( M
+  , Env
   , Broker(..)
   , KafkaException(..)
   , CommunicationException(..)
   , ProtocolException(..)
   , Description(..)
+  , openEnvironment
   , run
+  , runWithEnv
   , with
   , throw
   , throwErrorCode
@@ -40,7 +43,8 @@ module Kafka.Exchange
   , listOffsetsOnePartition
   ) where
 
-import Chan (M,KafkaException(..),CommunicationException(..),Description(..),run,with,throw,lift,substitute,throwProtocolException,throwErrorCode)
+import Chan (M,KafkaException(..),CommunicationException(..),Description(..),run,runWithEnv,with,throw,lift,substitute,throwProtocolException,throwErrorCode)
+import Chan (Env,openEnvironment)
 import Arithmetic.Types (Fin(Fin),Fin#)
 import Arithmetic.Nat (pattern N0#)
 import Kafka.Exchange.Types (ProtocolException(..))
