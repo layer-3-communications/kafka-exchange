@@ -7,6 +7,7 @@ module Kafka.Exchange.Types
 import Data.Word (Word16)
 import Data.Int (Int32)
 import Data.Text (Text)
+import Kafka.Parser.Context (Context)
 
 -- | The minimal information needed to connect to a broker.
 data Broker = Broker
@@ -26,6 +27,7 @@ data ProtocolException
   | ResponseHeaderMalformed
   | ResponseHeaderIncorrectCorrelationId
   | ResponseBodyMalformed
+  | ResponseBodyMalformedAt Context
   | ResponseArityMismatch
     -- ^ If we request one item and get back two items, this is the way
     -- that we communicate what happened.

@@ -32,10 +32,10 @@ exchange fin inner = do
   Correlated corrId payload <- Channel.exchangeBytes fin Communication.apiKey
     Communication.apiVersion Communication.responseHeaderVersion (Communication.toChunks inner)
   case Communication.decode payload of
-    Left _ -> do
+    Left ctx -> do
       host <- lookupHostname fin
       thePort <- lookupPort fin
-      Channel.throw (Communicate (CommunicationException Communication.apiKey host thePort corrId (Protocol Types.ResponseBodyMalformed)))
+      Channel.throw (Communicate (CommunicationException Communication.apiKey host thePort corrId (Protocol (Types.ResponseBodyMalformedAt ctx))))
     Right r -> pure (Correlated corrId r)
 
 -- | Variant of exchange that discards the correlation id.
