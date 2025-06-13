@@ -128,6 +128,8 @@ library
       requires (Communication as Kafka.JoinGroup),
     kafka-exchange:exchange (Exchange as Fetch)
       requires (Communication as Kafka.Fetch),
+    kafka-exchange:exchange (Exchange as FetchV12)
+      requires (Communication as Kafka.Fetch.V12),
     kafka-exchange:exchange (Exchange as FindCoordinator)
       requires (Communication as Kafka.FindCoordinator),
     kafka-exchange:exchange (Exchange as ListOffsets)
