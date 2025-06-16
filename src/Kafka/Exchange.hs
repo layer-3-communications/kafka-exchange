@@ -42,6 +42,7 @@ module Kafka.Exchange
   , bootstrap
   , bootstrapOne
   , listOffsetsOnePartition
+  , fetchOnePartitionV12
   ) where
 
 import Chan (M,KafkaException(..),CommunicationException(..),Description(..),run,runWithEnv,with,throw,lift,substitute,throwProtocolException,throwErrorCode)
@@ -51,7 +52,7 @@ import Arithmetic.Nat (pattern N0#)
 import Kafka.Exchange.Types (ProtocolException(..))
 import Kafka.Exchange.Types (Correlated(Correlated),Broker(..))
 import Data.Text (Text)
-import Data.Int (Int32)
+import Data.Int (Int32,Int64)
 import Data.Primitive (SmallArray)
 import Kafka.Parser.Context (Context(Top,Field,Index))
 import Kafka.Parser.Context (ContextualizedErrorCode(..))
@@ -86,6 +87,8 @@ import qualified Response.Fetch
 import qualified Request.ListOffsets
 import qualified Response.ListOffsets
 import qualified Kafka.RecordBatch.Request
+import qualified Kafka.Fetch.Request.V12
+import qualified Kafka.Fetch.Response.V12
 
 produce ::
      Fin# n
@@ -311,3 +314,48 @@ bootstrapOne !clientId !topicName !brokers = go 0 where
           else go (ix + 1)
         Right r -> pure (Right r)
     else pure (Left (Application ()))
+
+-- | In the argument request, the @topics@ field should be set to the empty
+-- array. It is be ignored and replaced by this function.
+--
+-- The value of @max_bytes@ from the top-level request is copied into the
+-- sole partition request.
+fetchOnePartitionV12 ::
+     Fin# n -- ^ Selects broker connection
+  -> Kafka.Fetch.Request.V12.Request
+  -> Text -- ^ Topic name
+  -> Int32 -- ^ Partition
+  -> Int32 -- ^ Leader epoch
+  -> Int64 -- ^ Offset
+  -> M e n Kafka.Fetch.Response.V12.Partition
+fetchOnePartitionV12 fin !req0 !topicName !prt !epoch !offset = do
+  let !topicsArray = Contiguous.singleton Kafka.Fetch.Request.V12.Topic
+        { name = topicName
+        , partitions = Contiguous.singleton Kafka.Fetch.Request.V12.Partition
+          { index = prt
+          , currentLeaderEpoch = epoch
+          , fetchOffset = offset
+          , lastFetchedEpoch = (-1)
+          , logStartOffset = (-1)
+          , maxBytes = req0.maxBytes
+          }
+        }
+  let req1 = req0{Kafka.Fetch.Request.V12.topics = topicsArray}
+  resp <- fetchV12 fin req1
+  case resp.errorCode of
+    None -> pure ()
+    -- TODO: put the real correlation id here and in the others
+    _ -> throwErrorCode fin ApiKey.Fetch 0 Ctx.Top resp.errorCode
+  case PM.sizeofSmallArray resp.topics of
+    1 -> pure ()
+    _ -> throwProtocolException fin ApiKey.Produce 0 ResponseArityMismatch
+  let topic = PM.indexSmallArray resp.topics 0
+  case PM.sizeofSmallArray topic.partitions of
+    1 -> pure ()
+    _ -> throwProtocolException fin ApiKey.Produce 0 ResponseArityMismatch
+  let partition = PM.indexSmallArray topic.partitions 0
+  case partition.errorCode of
+    None -> pure ()
+    _ -> throwErrorCode fin ApiKey.Fetch 0 (Ctx.Index 0 $ Ctx.Field Ctx.Partitions $ Ctx.Index 0 $ Ctx.Field Ctx.Topics $ Ctx.Top) resp.errorCode
+  pure partition
+
