@@ -356,6 +356,6 @@ fetchOnePartitionV12 fin !req0 !topicName !prt !epoch !offset = do
   let partition = PM.indexSmallArray topic.partitions 0
   case partition.errorCode of
     None -> pure ()
-    _ -> throwErrorCode fin ApiKey.Fetch 0 (Ctx.Index 0 $ Ctx.Field Ctx.Partitions $ Ctx.Index 0 $ Ctx.Field Ctx.Topics $ Ctx.Top) resp.errorCode
+    _ -> throwErrorCode fin ApiKey.Fetch 0 (Ctx.Index 0 $ Ctx.Field Ctx.Partitions $ Ctx.Index 0 $ Ctx.Field Ctx.Topics $ Ctx.Top) partition.errorCode
   pure partition
 
