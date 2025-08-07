@@ -19,9 +19,12 @@
 module Channel
   ( M
   , Env
+  , LogicalSessions
   , openEnvironment
+  , openLogicalSessions
   , run
   , runWithEnv
+  , runWithLogicalSessions
   , openAndRunN
   , with
   , withExisting
@@ -136,6 +139,12 @@ data Env = Env
   !Word16 -- port
   !Resource -- probably a socket
   !Int32 -- correlation id
+
+data LogicalSessions :: Nat -> Type where
+  LogicalSessions :: 
+       Int.Vector n (Fin# m) -- Length n. Indices (>=0, <m) into environment array
+    -> Lifted.Vector m Env -- Length m
+    -> LogicalSessions n
 
 -- | Make an environment.
 openEnvironment :: Text -> Word16 -> ChannelSig.M (Either ConnectException Env)
@@ -268,6 +277,45 @@ runWithEnv clientId env (M f) = do
     Right (Result envs' a) -> do
       let env' = Lifted.index0 envs'
       pure (Right (env', a))
+
+-- | Returns the updated sessions.
+runWithLogicalSessions ::
+     Text -- ^ Client id
+  -> Nat# n
+  -> LogicalSessions n
+  -> M e n a -- ^ Context with with all sessions available
+  -> ChannelSig.M (Either (KafkaException e) (LogicalSessions n, a))
+runWithLogicalSessions clientId n (LogicalSessions ixs envs) (M f) = do
+  f n ixs envs clientId >>= \case
+    Left e -> pure (Left e)
+    Right (Result envs' a) -> do
+      let !sessions = LogicalSessions ixs envs'
+      pure (Right (sessions, a))
+
+openLogicalSessions ::
+     Nat# n
+  -> Lifted.Vector n Broker -- ^ Brokers
+  -> ChannelSig.M (Either ConnectException (LogicalSessions n))
+openLogicalSessions !n !brokers = do
+  let uniqueBrokers = Lifted.ifoldl' (\acc _ b -> Map.insert b () acc) Map.empty n brokers
+  eenvsByBroker <- runExceptT $ Map.traverseWithKey
+    (\(Broker theHostname thePort) () -> ExceptT (openEnvironment theHostname thePort)
+    ) uniqueBrokers
+  case eenvsByBroker of
+    Left err -> pure (Left err)
+    Right envsByBroker -> do
+      let envsPairList = Map.toList envsByBroker
+      case Lifted.fromList envsPairList of
+        Lifted.Vector_ m envPairs# -> do
+          let envPairs = Lifted.Vector envPairs#
+          let envs = Vector.Map.Lifted.Lifted.map snd m envPairs
+          let ubrokers = Vector.Map.Lifted.Lifted.map fst m envPairs
+          let envIxs = Vector.Map.Lifted.Int.map
+                (\broker -> case Lifted.ifoldr (\fin candidate acc -> if broker == candidate then (Just (Fin.lift fin)) else acc) Nothing m ubrokers of
+                  Nothing -> errorWithoutStackTrace "kafka-exchange:channel:Channel.openLogicalSessions: Implementation mistake"
+                  Just fin -> Fin.unlift fin
+                ) n brokers
+          pure $! Right $! LogicalSessions envIxs envs
 
 -- | Connect to several brokers. This only establishes a single connection
 -- to each broker even if the same broker appears multiple times in the

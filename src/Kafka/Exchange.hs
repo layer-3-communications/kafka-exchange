@@ -14,9 +14,12 @@ module Kafka.Exchange
   , CommunicationException(..)
   , ProtocolException(..)
   , Description(..)
+  , LogicalSessions
   , openEnvironment
+  , openLogicalSessions
   , run
   , runWithEnv
+  , runWithLogicalSessions
   , with
   , throw
   , throwErrorCode
@@ -47,6 +50,7 @@ module Kafka.Exchange
 
 import Chan (M,KafkaException(..),CommunicationException(..),Description(..),run,runWithEnv,with,throw,lift,substitute,throwProtocolException,throwErrorCode)
 import Chan (Env,openEnvironment)
+import Chan (LogicalSessions,openLogicalSessions,runWithLogicalSessions)
 import Arithmetic.Types (Fin(Fin),Fin#)
 import Arithmetic.Nat (pattern N0#)
 import Kafka.Exchange.Types (ProtocolException(..))
