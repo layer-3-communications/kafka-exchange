@@ -4,3 +4,11 @@ source-repository-package
   type: git
   location: https://github.com/layer-3-communications/kafka-interchange.git
   tag: 84e605b576c0ea7758e80febfe9713111032c9e7
+source-repository-package
+  type: git
+  location: https://github.com/byteverse/natural-arithmetic.git
+  tag: cf131ef4122bfcacf925130b3d6eefc7ffb3302a
+source-repository-package
+  type: git
+  location: https://github.com/andrewthad/vext.git
+  tag: 48177c3d4d04291d5d9b98ef4b62669edda9e817

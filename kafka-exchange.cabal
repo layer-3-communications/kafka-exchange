@@ -55,16 +55,18 @@ library channel
   visibility: private
   build-depends:
     , base >= 4.11.1.0 && <5
-    , kafka-interchange
-    , text >=2.0
-    , byteslice >=0.2.15
-    , primitive >=0.8
-    , transformers >=0.5.6
-    , kafka-exchange:types
-    , natural-arithmetic >=0.1.4
     , byte-order >=0.1.3
-    , contiguous >=0.6.4
+    , byteslice >=0.2.15
     , bytesmith >=0.3.9
+    , contiguous >=0.6.4
+    , kafka-exchange:types
+    , kafka-interchange
+    , containers >=0.6.7
+    , natural-arithmetic >=0.1.4
+    , primitive >=0.8
+    , text >=2.0
+    , transformers >=0.5.6
+    , unlifted >=0.2.3
     , vext >=0.1.8
   signatures:
     ChannelSig

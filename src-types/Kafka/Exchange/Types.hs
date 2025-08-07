@@ -13,7 +13,7 @@ import Kafka.Parser.Context (Context)
 data Broker = Broker
   { host :: !Text
   , port :: !Word16
-  }
+  } deriving (Eq,Ord)
 
 -- | Associate a value with a correlation id.
 data Correlated a = Correlated

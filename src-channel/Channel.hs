@@ -22,6 +22,7 @@ module Channel
   , openEnvironment
   , run
   , runWithEnv
+  , openAndRunN
   , with
   , withExisting
   , throw
@@ -32,6 +33,9 @@ module Channel
   , lookupHostname
   , lookupPort
   , substitute
+  , substitute#
+    -- * Broker
+  , Broker(..)
     -- * Exceptions
   , KafkaException(..)
   , CommunicationException(..)
@@ -53,8 +57,8 @@ import Data.Word (Word16)
 import GHC.TypeNats (Nat,type (+))
 import Kafka.ApiKey (ApiKey)
 import Kafka.ErrorCode (ErrorCode)
-import Kafka.Exchange.Types (Broker)
-import Kafka.Exchange.Types (ProtocolException,Correlated(Correlated),Broker(Broker))
+import Kafka.Exchange.Types (Broker(..))
+import Kafka.Exchange.Types (ProtocolException,Correlated(Correlated))
 import Kafka.Parser.Context (Context)
 
 import qualified Arithmetic.Fin as Fin
@@ -67,10 +71,13 @@ import qualified Arithmetic.Nat as Nat
 import qualified Data.Bytes.Parser as Parser
 import qualified Kafka.Parser.Context as Ctx
 import qualified ChannelSig
+import qualified Data.Map.Strict as Map
 
 import qualified Vector.Int as Int
 import qualified Vector.Map.Int.Int
 import qualified Vector.Lifted as Lifted
+import qualified Vector.Map.Lifted.Lifted
+import qualified Vector.Map.Lifted.Int
 
 import qualified Kafka.Exchange.Types as Types
 
@@ -89,8 +96,8 @@ instance Show e => Show (KafkaException e) where
     (showString "Communicate " . showsPrec 11 e)
   showsPrec d (Application e) = showParen (d > 10)         
     (showString "Application " . showsPrec 11 e)
-  showsPrec d (Connect host thePort e) = showParen (d > 10)
-    (showString "Connect " . shows host . showChar ' ' . shows thePort . showChar ' ' . ChannelSig.showsPrecConnectException 11 e)
+  showsPrec d (Connect theHost thePort e) = showParen (d > 10)
+    (showString "Connect " . shows theHost . showChar ' ' . shows thePort . showChar ' ' . ChannelSig.showsPrecConnectException 11 e)
 
 data CommunicationException = CommunicationException
   { apiKey :: !ApiKey
@@ -200,7 +207,7 @@ with :: forall e n a.
      Broker -- ^ Hostname or IP address of broker
   -> M e (n + 1) a -- ^ Action in which additional broker is available
   -> M e n a
-with (Broker host thePort) (M f) = M inner
+with (Broker theHost thePort) (M f) = M inner
   where
   inner :: forall (m :: Nat).
        Nat# n
@@ -210,14 +217,14 @@ with (Broker host thePort) (M f) = M inner
     -> ChannelSig.M (Either (KafkaException e) (Result m a))
   inner n ixs envs clientId =
     let !envsLen = Lifted.length envs in
-    case Lifted.findIndex (\(Env existingHost existingPort _ _) -> existingHost == host && existingPort == thePort) envsLen envs of
+    case Lifted.findIndex (\(Env existingHost existingPort _ _) -> existingHost == theHost && existingPort == thePort) envsLen envs of
       MaybeFinJust# ix ->
         let ixs' = Int.cons n ixs ix
          in f (Nat.succ# n) ixs' envs clientId
-      _ -> ChannelSig.withConnection host thePort $ \r -> case r of
-        Left e -> pure (Left (Connect host thePort e))
+      _ -> ChannelSig.withConnection theHost thePort $ \r -> case r of
+        Left e -> pure (Left (Connect theHost thePort e))
         Right resource -> do
-          let !env = Env host thePort resource 0
+          let !env = Env theHost thePort resource 0
               envs' :: Lifted.Vector (m + 1) Env
               !envs' = Lifted.snoc envsLen envs env
               ixs' :: Int.Vector (n + 1) (Fin# (m + 1))
@@ -251,7 +258,7 @@ run clientId (M f) = f N0# Int.empty Lifted.empty clientId >>= \case
 runWithEnv ::
      Text -- ^ Client id
   -> Env -- ^ Initial environment
-  -> M e 1 a -- ^ Context with zero connections 
+  -> M e 1 a -- ^ Context with the environment available
   -> ChannelSig.M (Either (KafkaException e) (Env, a))
 runWithEnv clientId env (M f) = do
   let !envs = Lifted.construct1 env
@@ -262,12 +269,52 @@ runWithEnv clientId env (M f) = do
       let env' = Lifted.index0 envs'
       pure (Right (env', a))
 
+-- | Connect to several brokers. This only establishes a single connection
+-- to each broker even if the same broker appears multiple times in the
+-- array. This is most useful in the case where all partitions of a topic
+-- have already been discovered, and the user wants a logical connection
+-- per partition.
+--
+-- Note: This currently does not clean up after itself. The connections
+-- are left open after the function completes. I intend to fix this later.
+openAndRunN ::
+     Text -- ^ Client id
+  -> Nat# n
+  -> Lifted.Vector n Broker -- ^ Brokers
+  -> M e n a -- ^ Context with the environments available
+  -> ChannelSig.M (Either (KafkaException e) a)
+openAndRunN clientId n !brokers (M f) = do
+  let uniqueBrokers = Lifted.ifoldl' (\acc _ b -> Map.insert b () acc) Map.empty n brokers
+  eenvsByBroker <- runExceptT $ Map.traverseWithKey
+    (\(Broker theHostname thePort) () -> ExceptT $ do
+      openEnvironment theHostname thePort >>= \case
+        Right x -> pure (Right x)
+        Left err -> pure (Left (Connect theHostname thePort err))
+    ) uniqueBrokers
+  case eenvsByBroker of
+    Left err -> pure (Left err)
+    Right envsByBroker -> do
+      let envsPairList = Map.toList envsByBroker
+      case Lifted.fromList envsPairList of
+        Lifted.Vector_ m envPairs# -> do
+          let envPairs = Lifted.Vector envPairs#
+          let envs = Vector.Map.Lifted.Lifted.map snd m envPairs
+          let ubrokers = Vector.Map.Lifted.Lifted.map fst m envPairs
+          let envIxs = Vector.Map.Lifted.Int.map
+                (\broker -> case Lifted.ifoldr (\fin candidate acc -> if broker == candidate then (Just (Fin.lift fin)) else acc) Nothing m ubrokers of
+                  Nothing -> errorWithoutStackTrace "kafka-exchange:channel:Channel.openAndRunN: Implementation mistake"
+                  Just fin -> Fin.unlift fin
+                ) n brokers
+          f n envIxs envs clientId >>= \case
+            Left e -> pure (Left e)
+            Right (Result _ a) -> pure (Right a)
+
 -- | Get the hostname used for the connection.
 lookupHostname :: Fin# n -> M e n Text
 lookupHostname fin = M $ \_ ixs envs _ -> runExceptT $ do
   let !envIx = Int.index ixs fin
-  let Env host _ _ _ = Lifted.index envs envIx
-  pure (Result envs host)
+  let Env theHost _ _ _ = Lifted.index envs envIx
+  pure (Result envs theHost)
 
 -- | Get the hostname used for the connection.
 lookupPort :: Fin# n -> M e n Word16
@@ -291,7 +338,7 @@ exchangeBytes !fin !key !version !respHeaderVersion inner = M inside
   inside :: forall (m :: Nat). Nat# n -> Int.Vector n (Fin# m) -> Lifted.Vector m Env -> Text -> ChannelSig.M (Either (KafkaException e) (Result m (Correlated Bytes)))
   inside _ ixs envs clientId = runExceptT $ do
     let !(envIx :: Fin# m) = Int.index ixs fin
-    let Env host thePort resource corrId = Lifted.index envs envIx
+    let Env theHost thePort resource corrId = Lifted.index envs envIx
     let !hdr = Message.Request.Header
           { apiKey = key
           , apiVersion = version
@@ -305,31 +352,31 @@ exchangeBytes !fin !key !version !respHeaderVersion inner = M inside
     let enc = Message.Request.toChunks req
     ExceptT $ ChannelSig.send resource enc >>= \case
       Right (_ :: ()) -> pure (Right ())
-      Left e -> pure (Left (Communicate $ CommunicationException key host thePort corrId (Send e)))
+      Left e -> pure (Left (Communicate $ CommunicationException key theHost thePort corrId (Send e)))
     rawSz <- ExceptT $ ChannelSig.receiveExactly resource 4 >>= \case
       Right rawSz -> pure (Right rawSz)
-      Left e -> pure (Left (Communicate $ CommunicationException key host thePort corrId (Receive e)))
+      Left e -> pure (Left (Communicate $ CommunicationException key theHost thePort corrId (Receive e)))
     let sz = BigEndian.indexByteArray rawSz 0 :: Int32
-    when (sz < 0) (throwE (Communicate $ CommunicationException key host thePort corrId (Protocol Types.ResponseLengthNegative)))
+    when (sz < 0) (throwE (Communicate $ CommunicationException key theHost thePort corrId (Protocol Types.ResponseLengthNegative)))
     -- Technically, there's nothing wrong with a response that is
     -- larger than 512MB. It's just not going to happen in practice.
-    when (sz >= 512_000_000) (throwE (Communicate $ CommunicationException key host thePort corrId (Protocol Types.ResponseLengthTooHigh)))
+    when (sz >= 512_000_000) (throwE (Communicate $ CommunicationException key theHost thePort corrId (Protocol Types.ResponseLengthTooHigh)))
     byteArray <- ExceptT $ ChannelSig.receiveExactly resource (fromIntegral sz) >>= \case
       Right byteArray -> pure (Right byteArray)
-      Left e -> pure (Left (Communicate $ CommunicationException key host thePort corrId (Receive e)))
+      Left e -> pure (Left (Communicate $ CommunicationException key theHost thePort corrId (Receive e)))
     payload <- case respHeaderVersion of
       0 ->  case Parser.parseByteArray (Header.Response.V0.parser Ctx.Top) byteArray of
-        Parser.Failure _ -> throwE (Communicate $ CommunicationException key host thePort corrId (Protocol Types.ResponseHeaderMalformed))
+        Parser.Failure _ -> throwE (Communicate $ CommunicationException key theHost thePort corrId (Protocol Types.ResponseHeaderMalformed))
         Parser.Success (Parser.Slice off len respHdr) -> if respHdr.correlationId == corrId
           then pure (Bytes byteArray off len)
-          else throwE (Communicate $ CommunicationException key host thePort corrId (Protocol Types.ResponseHeaderIncorrectCorrelationId))
+          else throwE (Communicate $ CommunicationException key theHost thePort corrId (Protocol Types.ResponseHeaderIncorrectCorrelationId))
       1 -> case Parser.parseByteArray (Header.Response.V1.parser Ctx.Top) byteArray of
-        Parser.Failure _ -> throwE (Communicate $ CommunicationException key host thePort corrId (Protocol Types.ResponseHeaderMalformed))
+        Parser.Failure _ -> throwE (Communicate $ CommunicationException key theHost thePort corrId (Protocol Types.ResponseHeaderMalformed))
         Parser.Success (Parser.Slice off len respHdr) -> if respHdr.correlationId == corrId
           then pure (Bytes byteArray off len)
-          else throwE (Communicate $ CommunicationException key host thePort corrId (Protocol Types.ResponseHeaderIncorrectCorrelationId))
+          else throwE (Communicate $ CommunicationException key theHost thePort corrId (Protocol Types.ResponseHeaderIncorrectCorrelationId))
       _ -> errorWithoutStackTrace "kafka-exchange: huge mistake, expecting a response header version other than 0 or 1"
-    let !newEnv = Env host thePort resource (corrId + 1)
+    let !newEnv = Env theHost thePort resource (corrId + 1)
     let envs' = Lifted.replaceAt (Lifted.length envs) envs envIx newEnv
     pure (Result envs' (Correlated corrId payload))
 
@@ -376,3 +423,7 @@ substitute :: forall (e :: Type) (m :: Nat) (a :: Type) (n :: Nat). (m :=: n) ->
 substitute eq (M f) = M @e @n @a (\k ixs envs clientId -> f (Nat.substitute# eqA# k) (Int.substitute eqA# ixs) envs clientId)
   where
   !eqA# = Eq.unlift (Eq.symmetric eq)
+
+substitute# :: forall (e :: Type) (m :: Nat) (a :: Type) (n :: Nat). (m :=:# n) -> M e m a -> M e n a
+{-# inline substitute# #-}
+substitute# eq (M f) = M @e @n @a (\k ixs envs clientId -> f (Nat.substitute# (Eq.symmetric# eq) k) (Int.substitute (Eq.symmetric# eq) ixs) envs clientId)
