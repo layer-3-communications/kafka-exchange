@@ -22,7 +22,8 @@ module Channel
   , LogicalSessions
   , openEnvironment
   , openLogicalSessions
-  , envAt
+  , getEnvAt
+  , setEnvAt
   , run
   , runWithEnv
   , runWithLogicalSessions
@@ -52,6 +53,7 @@ import Data.Kind (Type)
 import Arithmetic.Types (Fin#,type (:=:), Nat#, type (:=:#), pattern MaybeFinJust#)
 import Arithmetic.Nat (pattern N0#, pattern N1#)
 import Control.Monad (when)
+import Control.Monad.ST (runST)
 import Control.Monad.Trans.Except (ExceptT(ExceptT),runExceptT,throwE)
 import Data.Bytes.Chunks (Chunks)
 import Data.Bytes.Types (Bytes(Bytes))
@@ -143,13 +145,20 @@ data Env = Env
 
 data LogicalSessions :: Nat -> Type where
   LogicalSessions :: 
-       Int.Vector n (Fin# m) -- Length n. Indices (>=0, <m) into environment array
+       Nat# m
+    -> Int.Vector n (Fin# m) -- Length n. Indices (>=0, <m) into environment array
     -> Lifted.Vector m Env -- Length m
     -> LogicalSessions n
 
-envAt :: Fin# n -> LogicalSessions n -> Env
-envAt ix (LogicalSessions ixs envs) =
+getEnvAt :: Fin# n -> LogicalSessions n -> Env
+getEnvAt ix (LogicalSessions _ ixs envs) =
   Lifted.index envs (Int.index ixs ix)
+
+setEnvAt :: Fin# n -> LogicalSessions n -> Env -> LogicalSessions n
+setEnvAt ix (LogicalSessions m ixs envs) e = LogicalSessions m ixs $ runST $ do
+  envs' <- Lifted.thaw m envs
+  Lifted.write envs' (Int.index ixs ix) e
+  Lifted.unsafeFreeze envs'
 
 -- | Make an environment.
 openEnvironment :: Text -> Word16 -> ChannelSig.M (Either ConnectException Env)
@@ -290,11 +299,11 @@ runWithLogicalSessions ::
   -> LogicalSessions n
   -> M e n a -- ^ Context with with all sessions available
   -> ChannelSig.M (Either (KafkaException e) (LogicalSessions n, a))
-runWithLogicalSessions clientId n (LogicalSessions ixs envs) (M f) = do
+runWithLogicalSessions clientId n (LogicalSessions m ixs envs) (M f) = do
   f n ixs envs clientId >>= \case
     Left e -> pure (Left e)
     Right (Result envs' a) -> do
-      let !sessions = LogicalSessions ixs envs'
+      let !sessions = LogicalSessions m ixs envs'
       pure (Right (sessions, a))
 
 openLogicalSessions ::
@@ -320,7 +329,7 @@ openLogicalSessions !n !brokers = do
                   Nothing -> errorWithoutStackTrace "kafka-exchange:channel:Channel.openLogicalSessions: Implementation mistake"
                   Just fin -> Fin.unlift fin
                 ) n brokers
-          pure $! Right $! LogicalSessions envIxs envs
+          pure $! Right $! LogicalSessions m envIxs envs
 
 -- | Connect to several brokers. This only establishes a single connection
 -- to each broker even if the same broker appears multiple times in the
