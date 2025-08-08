@@ -22,6 +22,7 @@ module Channel
   , LogicalSessions
   , openEnvironment
   , openLogicalSessions
+  , envAt
   , run
   , runWithEnv
   , runWithLogicalSessions
@@ -145,6 +146,10 @@ data LogicalSessions :: Nat -> Type where
        Int.Vector n (Fin# m) -- Length n. Indices (>=0, <m) into environment array
     -> Lifted.Vector m Env -- Length m
     -> LogicalSessions n
+
+envAt :: Fin# n -> LogicalSessions n -> Env
+envAt ix (LogicalSessions ixs envs) =
+  Lifted.index envs (Int.index ixs ix)
 
 -- | Make an environment.
 openEnvironment :: Text -> Word16 -> ChannelSig.M (Either ConnectException Env)
